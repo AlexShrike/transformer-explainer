@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transformer Explainer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>🔮 Transformer Explainer</h1>
+        <p class="subtitle">See data flow through a real transformer, step by step</p>
+    </header>
+
+    <div class="main-layout">
+        <!-- Left Panel: Input -->
+        <aside class="panel panel-left">
+            <h2>Input</h2>
+            <textarea id="input-text" placeholder="Type text here…" rows="3">the cat sat on </textarea>
+            <button id="btn-process" class="btn btn-primary">⚡ Process</button>
+            
+            <div id="tokenization" class="section hidden">
+                <h3>Tokenization</h3>
+                <div id="token-display" class="token-row"></div>
+            </div>
+
+            <div class="section">
+                <h3>Model Info</h3>
+                <div id="model-info" class="info-grid"></div>
+            </div>
+
+            <div class="section">
+                <h2>Generation</h2>
+                <button id="btn-generate" class="btn btn-secondary">🔄 Generate</button>
+                <div id="generation-output" class="hidden">
+                    <div id="gen-text" class="gen-text"></div>
+                    <div id="gen-steps"></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center Panel: Flow Diagram -->
+        <main class="panel panel-center">
+            <h2>Transformer Flow</h2>
+            <div id="flow-diagram">
+                <div class="flow-placeholder">Press ⚡ Process to visualize</div>
+            </div>
+        </main>
+
+        <!-- Right Panel: Inspector -->
+        <aside class="panel panel-right">
+            <h2>Detail Inspector</h2>
+            <div id="inspector">
+                <div class="inspector-placeholder">Click any component to inspect</div>
+            </div>
+        </aside>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
