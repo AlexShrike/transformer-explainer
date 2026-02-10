@@ -53,43 +53,46 @@ function paintLegend(canvasId) {
     }
 }
 
-// ─── Explanations ────────────────────────────────────────────
-const FLOW_EXPLANATIONS = {
-    tokens: "First, we break the text into tokens (pieces). Each token gets a number (ID) that the model understands. The model only works with numbers, not letters.",
-    embedding: "Each token ID is converted into a vector of numbers — like giving each word a unique 'fingerprint' that captures its meaning. We also add position information so the model knows word ORDER matters. 'Dog bites man' is not the same as 'Man bites dog'.",
-    attention: "This is where the magic happens! Each token looks at ALL other tokens and asks: 'How relevant are you to me?' The heatmap shows these relevance scores. Each row sums to 1.0.",
-    residual1: "We normalize values and add a shortcut connection (residual). This helps the model train better by letting information flow directly.",
-    ffn: "After attention, each token passes through a small neural network that transforms its representation independently — this is where much of the 'thinking' happens.",
-    residual2: "Another normalize + shortcut connection, this time around the feed-forward layer.",
-    output: "Finally, we convert the last token's representation into probabilities over all possible next tokens. The highest probability is our prediction!",
-};
+// ─── Dynamic Explanations ────────────────────────────────────
+function flowExplanation(type, data) {
+    if (!data || !modelInfo) return '';
+    const input = data.tokens.join('');
+    const n = data.tokens.length;
+    const tokenList = data.tokens.map((t, i) => `'${t === ' ' ? '(space)' : t}' (ID ${data.token_ids[i]})`).join(', ');
+    const d = modelInfo.d_model;
+    const dk = Math.floor(d / modelInfo.n_heads);
+    const lastChar = data.tokens[n - 1] === ' ' ? '(space)' : data.tokens[n - 1];
+    const topPred = data.top_predictions && data.top_predictions[0];
+
+    switch (type) {
+        case 'tokens':
+            return `We split '${escHtml(input)}' into ${n} tokens: ${tokenList}. Each character gets a unique number -- the model only understands numbers.`;
+        case 'embedding':
+            return `Each of the ${n} token IDs is converted into a vector of ${d} numbers (d_model = ${d}: the size of each token's vector -- like how many 'features' describe each token). We also add positional encoding -- a mathematical pattern that tells the model '${data.tokens[0]}' is at position 1, '${data.tokens[Math.min(1, n-1)]}' is at position 2, etc. Without this, the model would have no sense of order.`;
+        case 'attention':
+            return `Attention with ${modelInfo.n_heads} heads (n_heads = ${modelInfo.n_heads}: number of parallel attention mechanisms) means we run ${modelInfo.n_heads} SEPARATE attention mechanisms in parallel (at the same time). Each head can learn different relationships between tokens. For each token, we compute Query ('What am I looking for?', ${dk} numbers), Key ('What do I contain?', ${dk} numbers), and Value ('If selected, here is my information', ${dk} numbers). d_k = ${dk} (dimension per head = d_model / n_heads = ${d} / ${modelInfo.n_heads}). The 'parallel' part means all heads compute simultaneously, then their results are combined.`;
+        case 'residual1':
+        case 'residual2':
+            return `Residual connection: we ADD the input of this sublayer back to its output. If the attention/FFN learned nothing useful for '${escHtml(input)}', the original signal still passes through unchanged. LayerNorm: normalizes values to prevent them from growing too large or too small -- keeps training stable.`;
+        case 'ffn':
+            return `Each token passes through a 2-layer neural network independently. It expands from d_model (${d}) to d_ff (${modelInfo.d_ff}: the inner width -- temporarily expanded for more computational power), applies ReLU (sets negatives to zero), then compresses back to ${d}. This is where much of the model's 'thinking' happens for each token in '${escHtml(input)}'.`;
+        case 'output': {
+            const topChar = topPred ? (topPred.char === ' ' ? '(space)' : topPred.char) : '?';
+            const topProb = topPred ? (topPred.prob * 100).toFixed(1) : '?';
+            const top3 = (data.top_predictions || []).slice(0, 3).map(p => `'${p.char === ' ' ? '(space)' : p.char}' ${(p.prob*100).toFixed(1)}%`).join(', ');
+            return `For the last token '${lastChar}', we project its ${d}-dimensional vector to ${modelInfo.vocab_size} scores (vocab_size = ${modelInfo.vocab_size}: one per character the model knows). Softmax converts raw scores into probabilities that sum to 1.0. Top predictions: ${top3}. The model predicts '${topChar}' at ${topProb}%.`;
+        }
+        default:
+            return '';
+    }
+}
 
 const INSPECTOR_EXPLANATIONS = {
     overview: {
         title: 'How Transformers Work',
         body: `<p>A transformer processes text in a series of steps. Each step transforms the representation of every token, building up richer understanding.</p>
-        <p>The key innovation is <span class="tooltip" data-tip="A mechanism that lets each token look at all other tokens to determine relevance">attention</span> — it lets the model consider relationships between ALL positions simultaneously, unlike older models that read left-to-right.</p>
-        <p><strong>Click any component</strong> in the flow diagram to see its details, or use the <strong>step-by-step controls</strong> to walk through one piece at a time.</p>`
-    },
-    tokens: {
-        title: 'Tokenization',
-        body: `<p>The input text is split into individual characters. Each character is mapped to a unique ID from the <span class="tooltip" data-tip="The set of all characters the model knows about">vocabulary</span>.</p>
-        <p><strong>Token ID:</strong> Each character is mapped to a unique number. The model only works with numbers, not letters. These IDs are indices into the vocabulary table.</p>
-        <p>This is the simplest form of tokenization. Real LLMs like GPT use <span class="tooltip" data-tip="Byte-Pair Encoding: groups frequent character pairs into single tokens, e.g. 'th' becomes one token">subword tokenization (BPE)</span>, but characters make the process fully transparent.</p>`
-    },
-    embedding: {
-        title: 'Embedding + Positional Encoding',
-        body: `<p>Each token ID is looked up in an <span class="tooltip" data-tip="A learned matrix where row i is the vector for token i">embedding table</span> — think of it as converting a simple number into a rich, meaningful vector.</p>
-        <p><strong>Embedding vector:</strong> Each cell is one dimension of the embedding vector. Together, these numbers represent the token's meaning in a way the model can process.</p>
-        <p><strong>Positional encoding:</strong> These values encode WHERE the token is in the sequence. Notice the wave-like pattern — this is a sinusoidal encoding. Since transformers process all tokens in parallel (no left-to-right!), they have no built-in sense of order.</p>
-        <div class="formula">combined[i] = embedding[token_id] + positional_encoding[position]</div>`
-    },
-    output: {
-        title: 'Output Projection + Softmax',
-        body: `<p>The final hidden state is projected through a linear layer to produce <span class="tooltip" data-tip="Raw, unnormalized scores — one per vocabulary item">logits</span>.</p>
-        <p><span class="tooltip" data-tip="Converts raw scores into probabilities that sum to 1">Softmax</span> converts these to probabilities. The highest probability character is the model's prediction for the next character.</p>
-        <p><strong>Output probabilities:</strong> These are the model's predictions for the next character. Higher bar = more confident.</p>
-        <div class="formula">P(next_token = i) = exp(logit_i) / sum of exp(logit_j)</div>`
+        <p>The key innovation is <strong>attention</strong> -- a mechanism that lets each token look at all other tokens to determine relevance. It lets the model consider relationships between ALL positions simultaneously, unlike older models that read left-to-right.</p>
+        <p><strong>Click any component</strong> in the flow diagram to see its details with your actual input, or use the <strong>step-by-step controls</strong> to walk through one piece at a time.</p>`
     }
 };
 
@@ -169,9 +172,9 @@ function renderFlow(data) {
     container.innerHTML = '';
     flowNodesList = [];
 
-    addFlowNode(container, 'Step 1', 'Input Tokens', `${data.tokens.length} tokens`, FLOW_EXPLANATIONS.tokens, 'tokens', data);
+    addFlowNode(container, 'Step 1', 'Input Tokens', `${data.tokens.length} tokens`, flowExplanation('tokens', data), 'tokens', data);
     addArrow(container);
-    addFlowNode(container, 'Step 2', 'Embedding + Positional Encoding', `${modelInfo.d_model}-dim vectors`, FLOW_EXPLANATIONS.embedding, 'embedding', data);
+    addFlowNode(container, 'Step 2', 'Embedding + Positional Encoding', `${modelInfo.d_model}-dim vectors`, flowExplanation('embedding', data), 'embedding', data);
     addArrow(container);
 
     let stepNum = 3;
@@ -181,7 +184,7 @@ function renderFlow(data) {
         group.setAttribute('data-step-group', '');
         group.innerHTML = `<div class="flow-group-title">Transformer Block ${i + 1}</div>`;
 
-        const attnNode = makeFlowNode(`Step ${stepNum}`, 'Multi-Head Attention', `${modelInfo.n_heads} heads — each token decides how relevant every other token is`, FLOW_EXPLANATIONS.attention,
+        const attnNode = makeFlowNode(`Step ${stepNum}`, 'Multi-Head Attention', `${modelInfo.n_heads} heads — each token decides how relevant every other token is`, flowExplanation('attention', data),
             () => showInspector('attention', { block, blockIdx: i, data }));
         const preview = document.createElement('div');
         preview.className = 'node-preview';
@@ -193,21 +196,21 @@ function renderFlow(data) {
         stepNum++;
 
         addArrow(group);
-        const r1 = makeFlowNode(`Step ${stepNum}`, 'Add & LayerNorm', 'Residual connection — preserves original signal', FLOW_EXPLANATIONS.residual1,
+        const r1 = makeFlowNode(`Step ${stepNum}`, 'Add & LayerNorm', 'Residual connection -- preserves original signal', flowExplanation('residual1', data),
             () => showInspector('residual1', { block, blockIdx: i, data }));
         group.appendChild(r1);
         flowNodesList.push(r1);
         stepNum++;
 
         addArrow(group);
-        const ffn = makeFlowNode(`Step ${stepNum}`, 'Feed Forward Network', `${modelInfo.d_model} -> ${modelInfo.d_ff} -> ${modelInfo.d_model} (expand then compress)`, FLOW_EXPLANATIONS.ffn,
+        const ffn = makeFlowNode(`Step ${stepNum}`, 'Feed Forward Network', `${modelInfo.d_model} -> ${modelInfo.d_ff} -> ${modelInfo.d_model} (expand then compress)`, flowExplanation('ffn', data),
             () => showInspector('ffn', { block, blockIdx: i, data }));
         group.appendChild(ffn);
         flowNodesList.push(ffn);
         stepNum++;
 
         addArrow(group);
-        const r2 = makeFlowNode(`Step ${stepNum}`, 'Add & LayerNorm', 'Residual connection — preserves original signal', FLOW_EXPLANATIONS.residual2,
+        const r2 = makeFlowNode(`Step ${stepNum}`, 'Add & LayerNorm', 'Residual connection -- preserves original signal', flowExplanation('residual2', data),
             () => showInspector('residual2', { block, blockIdx: i, data }));
         group.appendChild(r2);
         flowNodesList.push(r2);
@@ -217,7 +220,7 @@ function renderFlow(data) {
         addArrow(container);
     });
 
-    addFlowNode(container, `Step ${stepNum}`, 'Output Linear + Softmax', `Top prediction: "${data.top_predictions[0]?.char}" (${(data.top_predictions[0]?.prob * 100).toFixed(1)}%)`, FLOW_EXPLANATIONS.output, 'output', data);
+    addFlowNode(container, `Step ${stepNum}`, 'Output Linear + Softmax', `Top prediction: "${data.top_predictions[0]?.char}" (${(data.top_predictions[0]?.prob * 100).toFixed(1)}%)`, flowExplanation('output', data), 'output', data);
 }
 
 function makeFlowNode(stepLabel, title, subtitle, explanation, onClick) {
@@ -333,21 +336,38 @@ function showInspector(type, data) {
     if (type === 'attention') {
         const { block, blockIdx, data: fullData } = data;
         const attn = block.attention;
-        let html = `<h3>Multi-Head Attention — Block ${blockIdx + 1}</h3>`;
-        html += `<p>Each <span class="tooltip" data-tip="The attention mechanism is split into multiple 'heads' that can each learn different patterns">head</span> learns to attend to different patterns. Bright cells = high attention (this token is very relevant).</p>`;
-        html += `<p><strong>How to read the heatmap:</strong> Each cell shows how much Token A (row) 'pays attention to' Token B (column). Higher (brighter) = more relevant. Each row sums to 1.0.</p>`;
-        html += `<p><span class="tooltip" data-tip="Query: What am I looking for?">Query (Q)</span> x <span class="tooltip" data-tip="Key: What do I contain?">Key (K)</span> = attention scores, then weighted sum of <span class="tooltip" data-tip="Value: What information do I give if selected?">Values (V)</span></p>`;
-        html += `<div class="formula">Attention(Q,K,V) = softmax(QK^T / sqrt(d_k)) * V</div>`;
+        const tokens = fullData.tokens;
+        const input = tokens.join('');
+        const dk = Math.floor(modelInfo.d_model / modelInfo.n_heads);
+        let html = `<h3>Multi-Head Attention -- Block ${blockIdx + 1}</h3>`;
+        html += `<p><strong>Multi-Head Attention</strong> means we run ${modelInfo.n_heads} SEPARATE attention mechanisms (called "heads") in parallel (at the same time) on '${escHtml(input)}'. n_heads (${modelInfo.n_heads}): number of parallel attention mechanisms. Each head can learn different relationships between the ${tokens.length} tokens.</p>`;
+        html += `<p><strong>How it works for '${escHtml(input)}':</strong> Each cell in the heatmap shows how much one token 'pays attention to' another. Row = the token asking, Column = the token being attended to. Each row sums to 1.0 (probabilities via softmax).</p>`;
+        html += `<p><strong>Q, K, V for each token:</strong></p><ul style="font-size:0.82rem;margin:0.3rem 0;">`;
+        tokens.forEach((t, i) => {
+            const display = t === ' ' ? '(space)' : t;
+            html += `<li>Token '${display}' at position ${i}: Query = 'What am I looking for?' (${dk} numbers), Key = 'What do I contain?' (${dk} numbers), Value = 'If selected, here is my info' (${dk} numbers)</li>`;
+        });
+        html += `</ul>`;
+        html += `<p>d_k (${dk}): dimension per attention head = d_model / n_heads = ${modelInfo.d_model} / ${modelInfo.n_heads}.</p>`;
+        html += `<div class="formula">Attention(Q,K,V) = softmax(QK^T / sqrt(${dk})) * V</div>`;
         html += colorLegendHTML('Low attention', 'High attention');
 
         const nHeads = attn.attn_weights.length;
         for (let h = 0; h < nHeads; h++) {
             html += `<h3>Head ${h + 1}</h3>`;
-            html += `<p style="font-size:0.78rem;color:var(--text-dim)">Each head can learn a different pattern — one might focus on adjacent tokens, another on repeated characters.</p>`;
+            // Show a notable attention pair for this head
+            const headW = attn.attn_weights[h];
+            let maxVal = 0, maxI = 0, maxJ = 0;
+            for (let i = 0; i < headW.length; i++) for (let j = 0; j < headW[i].length; j++) {
+                if (headW[i][j] > maxVal) { maxVal = headW[i][j]; maxI = i; maxJ = j; }
+            }
+            const fromT = tokens[maxI] === ' ' ? '(space)' : tokens[maxI];
+            const toT = tokens[maxJ] === ' ' ? '(space)' : tokens[maxJ];
+            html += `<p style="font-size:0.78rem;color:var(--text-dim)">Strongest connection: '${fromT}' (pos ${maxI}) attends to '${toT}' (pos ${maxJ}) at ${(maxVal*100).toFixed(1)}%.</p>`;
             html += `<div id="attn-head-${h}" class="attn-heatmap-container"></div>`;
         }
         html += `<h3>Matrix Dimensions</h3>`;
-        html += `<p>Q (Query), K (Key), V (Value): [${attn.Q.length} x ${attn.Q[0].length}] total, split per head: [${attn.Q_heads[0].length} x ${attn.Q_heads[0][0].length}]</p>`;
+        html += `<p>Q, K, V: [${attn.Q.length} tokens x ${attn.Q[0].length} total dims], split per head: [${attn.Q_heads[0].length} tokens x ${attn.Q_heads[0][0].length} dims (d_k=${dk})]</p>`;
 
         el.innerHTML = html;
 
@@ -368,12 +388,15 @@ function showInspector(type, data) {
     }
 
     if (type === 'ffn') {
-        const { block, blockIdx } = data;
+        const { block, blockIdx, data: fullData } = data;
         const ff = block.feed_forward;
-        let html = `<h3>Feed Forward Network — Block ${blockIdx + 1}</h3>`;
-        html += `<p>The feed-forward network transforms each token's representation independently. Two linear transformations with <span class="tooltip" data-tip="Rectified Linear Unit: sets negative values to 0, keeps positives unchanged">ReLU</span> activation in between.</p>`;
+        const input = fullData ? fullData.tokens.join('') : '';
+        let html = `<h3>Feed Forward Network -- Block ${blockIdx + 1}</h3>`;
+        html += `<p>Each of the ${fullData ? fullData.tokens.length : '?'} tokens in '${escHtml(input)}' passes through a 2-layer neural network independently (tokens do not interact here).</p>`;
+        html += `<p><strong>Layer 1:</strong> Expands from d_model (${modelInfo.d_model}: the size of each token's vector) to d_ff (${modelInfo.d_ff}: the inner width -- temporarily expanded for more computational power). That is a ${(modelInfo.d_ff / modelInfo.d_model).toFixed(1)}x expansion.</p>`;
+        html += `<p><strong>ReLU:</strong> Sets all negative values to zero. This non-linearity lets the network learn complex patterns.</p>`;
+        html += `<p><strong>Layer 2:</strong> Compresses back from ${modelInfo.d_ff} to ${modelInfo.d_model}.</p>`;
         html += `<div class="formula">FFN(x) = ReLU(x * W1 + b1) * W2 + b2</div>`;
-        html += `<p>Expansion ratio: ${modelInfo.d_model} -> ${modelInfo.d_ff} (${(modelInfo.d_ff / modelInfo.d_model).toFixed(1)}x expansion) -> ${modelInfo.d_model}</p>`;
         html += `<h3>Activation Heatmap (post-ReLU)</h3>`;
         html += `<p>This shows which neurons activated. Green = positive (activated neuron), dark = zero (filtered out by ReLU). The pattern of activations encodes learned features.</p>`;
         html += colorLegendHTML('Zero (filtered)', 'Strong activation');
@@ -393,19 +416,24 @@ function showInspector(type, data) {
     }
 
     if (type === 'residual1' || type === 'residual2') {
-        const { block, blockIdx } = data;
+        const { block, blockIdx, data: fullData } = data;
         const sub = type === 'residual1' ? 'Attention' : 'Feed-Forward';
-        el.innerHTML = `<h3>Add & LayerNorm — Block ${blockIdx + 1}</h3>
-            <p>After the ${sub} sublayer:</p>
-            <p><strong>Residual connection:</strong> We <em>add</em> the sublayer's input back to its output. This creates a "shortcut" that helps information and gradients flow during training.</p>
-            <p><strong><span class="tooltip" data-tip="Normalizes values across the feature dimension to have zero mean and unit variance">Layer normalization</span>:</strong> We normalize the result to stabilize training.</p>
+        const input = fullData ? fullData.tokens.join('') : '';
+        el.innerHTML = `<h3>Add & LayerNorm -- Block ${blockIdx + 1}</h3>
+            <p>After the ${sub} sublayer processes '${escHtml(input)}':</p>
+            <p><strong>Residual connection:</strong> We ADD the sublayer's input back to its output. If the ${sub} learned nothing useful for the tokens in '${escHtml(input)}', the original signal still passes through unchanged. This creates a "shortcut" that helps information and gradients flow during training.</p>
+            <p><strong>Layer normalization (LayerNorm):</strong> Normalizes values across the ${modelInfo.d_model} feature dimensions to have zero mean and unit variance. This prevents values from growing too large or too small, keeping training stable.</p>
             <div class="formula">output = LayerNorm(x + SubLayer(x))</div>
-            <p>Without residual connections, deep transformers would be nearly impossible to train — gradients would vanish in deeper layers.</p>`;
+            <p>Without residual connections, deep transformers would be nearly impossible to train -- gradients would vanish in deeper layers.</p>`;
         return;
     }
 
     if (type === 'output' && data.top_predictions) {
-        let html = INSPECTOR_EXPLANATIONS.output.body;
+        const lastChar = data.tokens[data.tokens.length - 1] === ' ' ? '(space)' : data.tokens[data.tokens.length - 1];
+        let html = `<h3>Output Projection + Softmax</h3>`;
+        html += `<p>For the last token '${lastChar}' in '${escHtml(data.tokens.join(''))}', we project its ${modelInfo.d_model}-dimensional vector (d_model = ${modelInfo.d_model}) through a linear layer to produce ${modelInfo.vocab_size} scores called <strong>logits</strong> (raw, unnormalized scores -- one per character in the vocabulary). vocab_size (${modelInfo.vocab_size}): total number of unique characters the model knows.</p>`;
+        html += `<p><strong>Softmax</strong> converts these raw scores into probabilities that sum to 1.0. The highest probability character is the model's prediction for the next character.</p>`;
+        html += `<div class="formula">P(next_token = i) = exp(logit_i) / sum of exp(logit_j)</div>`;
         html += `<h3>Top Predictions</h3>`;
         html += `<p style="font-size:0.82rem;color:var(--text-secondary)">These are the model's predictions for the next character. Higher bar = more confident.</p>`;
         html += `<div class="bar-chart">`;
@@ -437,9 +465,14 @@ function showInspector(type, data) {
     }
 
     if (type === 'embedding' && data.embedding) {
-        let html = INSPECTOR_EXPLANATIONS.embedding.body;
+        const input = data.tokens.join('');
+        const firstTok = data.tokens[0] === ' ' ? '(space)' : data.tokens[0];
+        let html = `<h3>Embedding + Positional Encoding</h3>`;
+        html += `<p>Each of the ${data.tokens.length} token IDs from '${escHtml(input)}' is looked up in an embedding table -- a learned matrix where row i is the vector for token i. Think of it as converting the simple number ${data.token_ids[0]} for '${firstTok}' into a rich description with d_model (${modelInfo.d_model}: the size of each token's vector -- like how many 'features' describe each token) dimensions.</p>`;
+        html += `<p><strong>Positional encoding:</strong> These values encode WHERE the token is in the sequence. Since transformers process all tokens in parallel (no left-to-right!), they have no built-in sense of order. The sinusoidal encoding gives each position a unique signature: '${data.tokens[0]}' at position 0, '${data.tokens[Math.min(1, data.tokens.length-1)]}' at position 1, etc.</p>`;
+        html += `<div class="formula">combined[i] = embedding[token_id] + positional_encoding[position]</div>`;
         html += `<h3>Token Embeddings Heatmap</h3>`;
-        html += `<p>Each row is one token's embedding vector. Each cell is one dimension of the embedding. Together, these ${modelInfo.d_model} numbers represent the token's meaning. Similar patterns = similar meanings.</p>`;
+        html += `<p>Each row is one token from '${escHtml(input)}'. Each cell is one of the ${modelInfo.d_model} dimensions. Together, these numbers represent the token's meaning. Similar patterns = similar meanings.</p>`;
         html += colorLegendHTML('Low value', 'High value');
         html += `<div id="emb-heatmap"></div>`;
         html += `<h3>Positional Encoding Heatmap</h3>`;
@@ -460,6 +493,16 @@ function showInspector(type, data) {
         appendHeatmap('#emb-heatmap', data.embedding.token_embeddings);
         appendHeatmap('#pe-heatmap', data.embedding.positional_encoding);
         appendHeatmap('#combined-heatmap', data.embedding.combined);
+        return;
+    }
+
+    if (type === 'tokens' && data && data.tokens) {
+        const input = data.tokens.join('');
+        const tokenList = data.tokens.map((t, i) => `'${t === ' ' ? '(space)' : t}' = ID ${data.token_ids[i]}`).join(', ');
+        el.innerHTML = `<h3>Tokenization</h3>
+            <p>We split '${escHtml(input)}' into ${data.tokens.length} individual character tokens: ${tokenList}.</p>
+            <p><strong>Token ID:</strong> Each character is mapped to a unique number from the vocabulary (vocab_size = ${modelInfo.vocab_size}: total number of unique characters the model knows). The model only works with numbers, not letters. These IDs are indices into the vocabulary table.</p>
+            <p>This is the simplest form of tokenization. Real LLMs like GPT use subword tokenization (BPE -- Byte-Pair Encoding groups frequent character pairs into single tokens, e.g. 'th' becomes one token), but characters make the process fully transparent.</p>`;
         return;
     }
 
