@@ -1,36 +1,75 @@
-/* Transformer Explainer — Frontend */
+/* Transformer Explainer — Frontend (Redesigned) */
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
 let currentData = null;
 let modelInfo = null;
+let stepMode = false;
+let currentStep = 0;
+let totalSteps = 0;
+let flowNodesList = []; // ordered list of flow nodes/groups for step mode
 
-// ─── Color Utils ─────────────────────────────────────────────
+// ─── Token Colors (pastel-friendly) ─────────────────────────
 const TOKEN_COLORS = [
-    '#4f8fff', '#ff6b6b', '#51cf66', '#ffd43b', '#cc5de8',
-    '#ff922b', '#20c997', '#f06595', '#7950f2', '#15aabf',
+    '#4A90D9', '#E67E73', '#5BB98B', '#F0AD4E', '#9B7ED8',
+    '#E8856E', '#3DBDB1', '#D86B9F', '#7C6DD8', '#48ADCF',
 ];
 
-function valToColor(val, min, max) {
-    const t = Math.max(0, Math.min(1, (val - min) / (max - min + 1e-9)));
-    const r = Math.round(15 + t * 64);
-    const g = Math.round(23 + t * 80);
-    const b = Math.round(85 + t * 170);
-    return `rgb(${r},${g},${b})`;
-}
-
+// ─── Heatmap Colors (blue-orange diverging) ──────────────────
 function heatColor(val) {
-    // 0=dark blue, 0.5=purple, 1=bright red
     const t = Math.max(0, Math.min(1, val));
     if (t < 0.5) {
         const s = t * 2;
-        return `rgb(${Math.round(s * 160)}, ${Math.round(30 + s * 20)}, ${Math.round(120 + s * 80)})`;
+        const r = Math.round(235 - s * 60);
+        const g = Math.round(240 - s * 60);
+        const b = Math.round(248 - s * 30);
+        return `rgb(${r},${g},${b})`;
     } else {
         const s = (t - 0.5) * 2;
-        return `rgb(${Math.round(160 + s * 95)}, ${Math.round(50 - s * 30)}, ${Math.round(200 - s * 160)})`;
+        const r = Math.round(175 + s * 55);
+        const g = Math.round(180 - s * 100);
+        const b = Math.round(218 - s * 170);
+        return `rgb(${r},${g},${b})`;
     }
 }
+
+// ─── Explanations ────────────────────────────────────────────
+const FLOW_EXPLANATIONS = {
+    tokens: "First, we break the text into tokens (pieces). Each token gets a number (ID) that the model understands.",
+    embedding: "Each token ID is converted into a vector of numbers — like giving each word a unique 'fingerprint' that captures its meaning. We also add position information so the model knows word ORDER matters. 'Dog bites man' ≠ 'Man bites dog'.",
+    attention: "This is where the magic happens! Each token looks at ALL other tokens and asks: 'How relevant are you to me?' The heatmap shows these relevance scores.",
+    residual1: "We normalize values and add a shortcut connection (residual). This helps the model train better by letting information flow directly.",
+    ffn: "After attention, each token passes through a small neural network that transforms its representation — this is where much of the 'thinking' happens.",
+    residual2: "Another normalize + shortcut connection, this time around the feed-forward layer.",
+    output: "Finally, we convert the last token's representation into probabilities over all possible next tokens. The highest probability is our prediction!",
+};
+
+const INSPECTOR_EXPLANATIONS = {
+    overview: {
+        title: '🔮 How Transformers Work',
+        body: `<p>A transformer processes text in a series of steps. Each step transforms the representation of every token, building up richer understanding.</p>
+        <p>The key innovation is <span class="tooltip" data-tip="A mechanism that lets each token look at all other tokens to determine relevance">attention</span> — it lets the model consider relationships between ALL positions simultaneously, unlike older models that read left-to-right.</p>
+        <p><strong>Click any component</strong> in the flow diagram to see its details, or use the <strong>step-by-step controls</strong> to walk through one piece at a time.</p>`
+    },
+    tokens: {
+        title: '🔤 Tokenization',
+        body: `<p>The input text is split into individual characters. Each character is mapped to a unique ID from the <span class="tooltip" data-tip="The set of all characters the model knows about">vocabulary</span>.</p>
+        <p>This is the simplest form of tokenization. Real LLMs like GPT use <span class="tooltip" data-tip="Byte-Pair Encoding: groups frequent character pairs into single tokens, e.g. 'th' → one token">subword tokenization (BPE)</span>, but characters make the process fully transparent.</p>`
+    },
+    embedding: {
+        title: '🔢 Embedding + Positional Encoding',
+        body: `<p>Each token ID is looked up in an <span class="tooltip" data-tip="A learned matrix where row i is the vector for token i">embedding table</span> — think of it as converting a simple number into a rich, meaningful vector.</p>
+        <p>Since transformers process all tokens in parallel (no left-to-right!), they have no built-in sense of order. We add <span class="tooltip" data-tip="Fixed sinusoidal patterns that encode each position uniquely">positional encodings</span> — mathematical patterns that tell the model where each token sits.</p>
+        <div class="formula">combined[i] = embedding[token_id] + positional_encoding[position]</div>`
+    },
+    output: {
+        title: '📊 Output Projection + Softmax',
+        body: `<p>The final hidden state is projected through a linear layer to produce <span class="tooltip" data-tip="Raw, unnormalized scores — one per vocabulary item">logits</span>.</p>
+        <p><span class="tooltip" data-tip="Converts raw scores into probabilities that sum to 1">Softmax</span> converts these to probabilities. The highest probability character is the model's prediction for the next character.</p>
+        <div class="formula">P(next_token = i) = exp(logit_i) / Σ exp(logit_j)</div>`
+    }
+};
 
 // ─── Init ────────────────────────────────────────────────────
 async function init() {
@@ -41,12 +80,16 @@ async function init() {
     } catch(e) {
         console.error('Failed to load model info', e);
     }
-    
+
     $('#btn-process').addEventListener('click', doProcess);
     $('#btn-generate').addEventListener('click', doGenerate);
     $('#input-text').addEventListener('keydown', e => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doProcess(); }
     });
+    $('#btn-next-step').addEventListener('click', () => navigateStep(1));
+    $('#btn-prev-step').addEventListener('click', () => navigateStep(-1));
+    $('#btn-show-all').addEventListener('click', showAllSteps);
+    $('#btn-close-gen').addEventListener('click', () => $('#generation-banner').classList.add('hidden'));
 }
 
 function renderModelInfo(info) {
@@ -65,7 +108,7 @@ function renderModelInfo(info) {
 async function doProcess() {
     const text = $('#input-text').value.trim();
     if (!text) return;
-    
+
     $('#btn-process').textContent = '⏳ Processing…';
     try {
         const res = await fetch('/api/process', {
@@ -77,6 +120,7 @@ async function doProcess() {
         renderTokens(currentData);
         renderFlow(currentData);
         showInspector('overview', currentData);
+        enableStepMode();
     } catch(e) {
         console.error(e);
     }
@@ -98,49 +142,61 @@ function renderTokens(data) {
 function renderFlow(data) {
     const container = $('#flow-diagram');
     container.innerHTML = '';
-    
-    // Input tokens
-    addFlowNode(container, '📝 Input Tokens', `${data.tokens.length} characters`, 'tokens', data);
+    flowNodesList = [];
+
+    addFlowNode(container, '📝', 'Input Tokens', `${data.tokens.length} tokens`, FLOW_EXPLANATIONS.tokens, 'tokens', data);
     addArrow(container);
-    
-    // Embedding
-    addFlowNode(container, '🔢 Embedding + Positional Encoding', `${modelInfo.d_model}-dim vectors`, 'embedding', data);
+    addFlowNode(container, '🔢', 'Embedding + Positional Encoding', `${modelInfo.d_model}-dim vectors`, FLOW_EXPLANATIONS.embedding, 'embedding', data);
     addArrow(container);
-    
-    // Transformer blocks
+
     data.blocks.forEach((block, i) => {
         const group = document.createElement('div');
         group.className = 'flow-group';
+        group.setAttribute('data-step-group', '');
         group.innerHTML = `<div class="flow-group-title">Transformer Block ${i + 1}</div>`;
-        
-        const attnNode = makeFlowNode('🎯 Multi-Head Attention', `${modelInfo.n_heads} heads`, () => showInspector('attention', { block, blockIdx: i, data }));
-        // Mini attention preview
+
+        const attnNode = makeFlowNode('🎯', 'Multi-Head Attention', `${modelInfo.n_heads} heads`, FLOW_EXPLANATIONS.attention,
+            () => showInspector('attention', { block, blockIdx: i, data }));
         const preview = document.createElement('div');
         preview.className = 'node-preview';
-        const canvas = createAttentionHeatmap(block.attention.attn_weights, data.tokens, 120);
+        const canvas = createAttentionHeatmap(block.attention.attn_weights, data.tokens, 140);
         if (canvas) preview.appendChild(canvas);
         attnNode.appendChild(preview);
         group.appendChild(attnNode);
-        
+        flowNodesList.push(attnNode);
+
         addArrow(group);
-        group.appendChild(makeFlowNode('➕ Add & LayerNorm', 'Residual connection', () => showInspector('residual1', { block, blockIdx: i, data })));
+        const r1 = makeFlowNode('➕', 'Add & LayerNorm', 'Residual connection', FLOW_EXPLANATIONS.residual1,
+            () => showInspector('residual1', { block, blockIdx: i, data }));
+        group.appendChild(r1);
+        flowNodesList.push(r1);
+
         addArrow(group);
-        group.appendChild(makeFlowNode('⚙️ Feed Forward', `${modelInfo.d_model} → ${modelInfo.d_ff} → ${modelInfo.d_model}`, () => showInspector('ffn', { block, blockIdx: i, data })));
+        const ffn = makeFlowNode('⚙️', 'Feed Forward', `${modelInfo.d_model} → ${modelInfo.d_ff} → ${modelInfo.d_model}`, FLOW_EXPLANATIONS.ffn,
+            () => showInspector('ffn', { block, blockIdx: i, data }));
+        group.appendChild(ffn);
+        flowNodesList.push(ffn);
+
         addArrow(group);
-        group.appendChild(makeFlowNode('➕ Add & LayerNorm', 'Residual connection', () => showInspector('residual2', { block, blockIdx: i, data })));
-        
+        const r2 = makeFlowNode('➕', 'Add & LayerNorm', 'Residual connection', FLOW_EXPLANATIONS.residual2,
+            () => showInspector('residual2', { block, blockIdx: i, data }));
+        group.appendChild(r2);
+        flowNodesList.push(r2);
+
         container.appendChild(group);
         addArrow(container);
     });
-    
-    // Output
-    addFlowNode(container, '📊 Output Linear + Softmax', `Top: "${data.top_predictions[0]?.char}" (${(data.top_predictions[0]?.prob * 100).toFixed(1)}%)`, 'output', data);
+
+    addFlowNode(container, '📊', 'Output Linear + Softmax', `Top: "${data.top_predictions[0]?.char}" (${(data.top_predictions[0]?.prob * 100).toFixed(1)}%)`, FLOW_EXPLANATIONS.output, 'output', data);
 }
 
-function makeFlowNode(title, subtitle, onClick) {
+function makeFlowNode(icon, title, subtitle, explanation, onClick) {
     const node = document.createElement('div');
     node.className = 'flow-node';
-    node.innerHTML = `<div class="node-title">${title}</div><div class="node-subtitle">${subtitle}</div>`;
+    node.innerHTML = `
+        <div class="node-header"><span class="node-icon">${icon}</span><span class="node-title">${title}</span></div>
+        <div class="node-subtitle">${subtitle}</div>
+        <div class="node-explanation">${explanation}</div>`;
     if (onClick) node.addEventListener('click', () => {
         $$('.flow-node').forEach(n => n.classList.remove('active'));
         node.classList.add('active');
@@ -149,27 +205,81 @@ function makeFlowNode(title, subtitle, onClick) {
     return node;
 }
 
-function addFlowNode(container, title, subtitle, type, data) {
-    const node = makeFlowNode(title, subtitle, () => showInspector(type, data));
+function addFlowNode(container, icon, title, subtitle, explanation, type, data) {
+    const node = makeFlowNode(icon, title, subtitle, explanation, () => showInspector(type, data));
     container.appendChild(node);
+    flowNodesList.push(node);
 }
 
 function addArrow(container) {
     const arrow = document.createElement('div');
-    arrow.className = 'flow-arrow';
+    arrow.className = 'flow-arrow animated';
     container.appendChild(arrow);
+}
+
+// ─── Step-by-Step Mode ───────────────────────────────────────
+function enableStepMode() {
+    totalSteps = flowNodesList.length;
+    currentStep = totalSteps; // show all by default
+    stepMode = false;
+    $('#step-controls').classList.remove('hidden');
+    showAllSteps();
+}
+
+function navigateStep(delta) {
+    if (!stepMode) {
+        stepMode = true;
+        currentStep = delta > 0 ? 0 : totalSteps - 1;
+    } else {
+        currentStep = Math.max(0, Math.min(totalSteps - 1, currentStep + delta));
+    }
+    updateStepView();
+}
+
+function showAllSteps() {
+    stepMode = false;
+    currentStep = totalSteps;
+    flowNodesList.forEach(n => {
+        n.classList.remove('step-hidden', 'step-current');
+    });
+    $$('.flow-group').forEach(g => g.classList.remove('step-hidden'));
+    updateStepIndicator();
+}
+
+function updateStepView() {
+    flowNodesList.forEach((n, i) => {
+        n.classList.remove('step-current', 'step-hidden');
+        if (i > currentStep) n.classList.add('step-hidden');
+        if (i === currentStep) n.classList.add('step-current');
+    });
+    // Show/hide groups
+    $$('.flow-group').forEach(group => {
+        const children = Array.from(group.querySelectorAll('.flow-node'));
+        const allHidden = children.every(c => c.classList.contains('step-hidden'));
+        group.classList.toggle('step-hidden', allHidden);
+    });
+    updateStepIndicator();
+
+    // Auto-click current step node to show inspector
+    if (flowNodesList[currentStep]) {
+        flowNodesList[currentStep].click();
+        flowNodesList[currentStep].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+function updateStepIndicator() {
+    $('#step-indicator').textContent = stepMode ? `Step ${currentStep + 1} / ${totalSteps}` : `All ${totalSteps} steps`;
+    $('#btn-prev-step').disabled = stepMode && currentStep === 0;
+    $('#btn-next-step').disabled = stepMode && currentStep === totalSteps - 1;
 }
 
 // ─── Attention Heatmap ───────────────────────────────────────
 function createAttentionHeatmap(attnWeights, tokens, size) {
-    // attnWeights: array of heads, each head is [seq x seq]
-    // Show first head by default
     if (!attnWeights || !attnWeights.length) return null;
-    
-    const head = attnWeights[0]; // first head
+    const head = attnWeights[0];
     const seq = head.length;
     if (seq === 0) return null;
-    
+
     const cellSize = Math.min(Math.floor(size / seq), 20);
     const canvas = document.createElement('canvas');
     canvas.className = 'heatmap';
@@ -177,7 +287,7 @@ function createAttentionHeatmap(attnWeights, tokens, size) {
     canvas.height = cellSize * seq;
     canvas.style.width = canvas.width + 'px';
     canvas.style.height = canvas.height + 'px';
-    
+
     const ctx = canvas.getContext('2d');
     for (let i = 0; i < seq; i++) {
         for (let j = 0; j < seq; j++) {
@@ -189,36 +299,26 @@ function createAttentionHeatmap(attnWeights, tokens, size) {
 }
 
 // ─── Inspector ───────────────────────────────────────────────
-const EXPLANATIONS = {
-    overview: `<h3>How it works</h3><p>The transformer processes your input text character by character. Each character is converted to a number (token ID), then to a vector (embedding). These vectors flow through transformer blocks, where <b>attention</b> lets each position look at all others, and <b>feed-forward</b> layers transform the representations. Finally, a linear layer + softmax predicts the next character.</p>`,
-    tokens: `<h3>Tokenization</h3><p>The input text is split into individual characters. Each character is mapped to a unique ID from the vocabulary. This is the simplest form of tokenization — real LLMs use subword tokenization (BPE), but characters make the process fully transparent.</p>`,
-    embedding: `<h3>Embedding + Positional Encoding</h3><p>Each token ID is looked up in an <b>embedding table</b> — a learned matrix where each row is a vector representing a character. Since transformers have no notion of order, we add <b>sinusoidal positional encodings</b> — fixed patterns that encode each position.</p>`,
-    output: `<h3>Output Projection</h3><p>The final hidden state is projected through a linear layer to produce <b>logits</b> (one score per vocabulary item). <b>Softmax</b> converts these to probabilities. The highest probability character is the model's prediction for the next character.</p>`,
-};
-
 function showInspector(type, data) {
     const el = $('#inspector');
-    
+
     if (type === 'attention') {
         const { block, blockIdx, data: fullData } = data;
         const attn = block.attention;
         let html = `<h3>🎯 Multi-Head Attention — Block ${blockIdx + 1}</h3>`;
-        html += `<p>Each head learns to attend to different patterns. The attention matrix shows how much each position "looks at" every other position. Bright = high attention.</p>`;
-        
-        // Show each head
+        html += `<p>Each <span class="tooltip" data-tip="The attention mechanism is split into multiple 'heads' that can each learn different patterns">head</span> learns to attend to different patterns. Bright cells = high attention (this token is very relevant).</p>`;
+        html += `<p><span class="tooltip" data-tip="What am I looking for?">Query (Q)</span> × <span class="tooltip" data-tip="What do I contain?">Key (K)</span> = attention scores → weighted sum of <span class="tooltip" data-tip="What information do I give if selected?">Values (V)</span></p>`;
+        html += `<div class="formula">Attention(Q,K,V) = softmax(QKᵀ / √d_k) · V</div>`;
+
         const nHeads = attn.attn_weights.length;
         for (let h = 0; h < nHeads; h++) {
             html += `<h3>Head ${h + 1}</h3>`;
             html += `<div id="attn-head-${h}" class="attn-heatmap-container"></div>`;
         }
-        
-        // Q, K, V info
         html += `<h3>Dimensions</h3>`;
         html += `<p>Q, K, V: [${attn.Q.length} × ${attn.Q[0].length}] → per head: [${attn.Q_heads[0].length} × ${attn.Q_heads[0][0].length}]</p>`;
-        
+
         el.innerHTML = html;
-        
-        // Render heatmaps after DOM update
         for (let h = 0; h < nHeads; h++) {
             const container = $(`#attn-head-${h}`);
             if (container) {
@@ -228,168 +328,207 @@ function showInspector(type, data) {
         }
         return;
     }
-    
+
     if (type === 'ffn') {
         const { block, blockIdx } = data;
         const ff = block.feed_forward;
         let html = `<h3>⚙️ Feed Forward — Block ${blockIdx + 1}</h3>`;
-        html += `<p>Two linear transformations with ReLU activation in between. This is where the model does most of its "thinking" — transforming the attention-mixed representations into richer features.</p>`;
-        html += `<p>Formula: FFN(x) = ReLU(xW₁ + b₁)W₂ + b₂</p>`;
-        
-        // Show activation heatmap
+        html += `<p>Two linear transformations with <span class="tooltip" data-tip="Rectified Linear Unit: sets negative values to 0, keeps positives unchanged">ReLU</span> activation in between. This is where the model transforms attention-mixed representations into richer features.</p>`;
+        html += `<div class="formula">FFN(x) = ReLU(xW₁ + b₁)W₂ + b₂</div>`;
+        html += `<p>Expansion ratio: ${modelInfo.d_model} → ${modelInfo.d_ff} (${(modelInfo.d_ff / modelInfo.d_model).toFixed(1)}×) → ${modelInfo.d_model}</p>`;
         html += `<h3>Activation Heatmap (post-ReLU)</h3>`;
+        html += `<p>Green = positive (activated), dark = zero (filtered out by ReLU)</p>`;
         html += `<div id="ffn-heatmap"></div>`;
         el.innerHTML = html;
-        
+
         const heatmapEl = $('#ffn-heatmap');
-        const activations = ff.post_activation;
-        if (activations && heatmapEl) {
-            const canvas = createMatrixHeatmap(activations, 200);
-            heatmapEl.appendChild(canvas);
+        if (ff.post_activation && heatmapEl) {
+            heatmapEl.appendChild(createMatrixHeatmap(ff.post_activation, 280));
         }
         return;
     }
-    
+
     if (type === 'residual1' || type === 'residual2') {
         const { block, blockIdx } = data;
-        const key = type === 'residual1' ? 'residual_after_attn' : 'residual_after_ff';
+        const sub = type === 'residual1' ? 'Attention' : 'Feed-Forward';
         el.innerHTML = `<h3>➕ Add & LayerNorm — Block ${blockIdx + 1}</h3>
-            <p><b>Residual connection:</b> The input is added to the output of the sub-layer. This helps gradients flow during training and lets the model preserve information.</p>
-            <p><b>Layer normalization:</b> The result is normalized across the feature dimension to stabilize training.</p>
-            <p>Formula: LayerNorm(x + SubLayer(x))</p>`;
+            <p>After the ${sub} sublayer:</p>
+            <p><strong>Residual connection:</strong> We <em>add</em> the sublayer's input back to its output. This creates a "shortcut" that helps information and gradients flow during training.</p>
+            <p><strong><span class="tooltip" data-tip="Normalizes values across the feature dimension to have zero mean and unit variance">Layer normalization</span>:</strong> We normalize the result to stabilize training.</p>
+            <div class="formula">output = LayerNorm(x + SubLayer(x))</div>
+            <p>Without residual connections, deep transformers would be nearly impossible to train — gradients would vanish in deeper layers.</p>`;
         return;
     }
-    
+
     if (type === 'output' && data.top_predictions) {
-        let html = EXPLANATIONS.output;
+        let html = INSPECTOR_EXPLANATIONS.output.body;
         html += `<h3>Top Predictions</h3><div class="bar-chart">`;
         data.top_predictions.forEach(p => {
             const pct = (p.prob * 100).toFixed(1);
             const display = p.char === ' ' ? '␣' : (p.char === '\n' ? '↵' : p.char);
+            const color = p === data.top_predictions[0] ? 'var(--accent)' : '#b0bec5';
             html += `<div class="bar-row">
                 <span class="bar-label">'${display}'</span>
-                <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:var(--accent)">${pct}%</div></div>
+                <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}">${pct}%</div></div>
             </div>`;
         });
         html += `</div>`;
-        
-        // Show logits
-        html += `<h3>Raw Logits (top 10)</h3><div class="matrix-view"><code>`;
+
         const logits = data.final_logits;
         if (logits) {
+            html += `<h3>Raw Logits (top 10)</h3><div class="matrix-view">`;
             const sorted = logits.map((v, i) => [i, v]).sort((a, b) => b[1] - a[1]).slice(0, 10);
             sorted.forEach(([i, v]) => {
-                html += `[${i}] = ${v.toFixed(3)}<br>`;
+                const color = v > 0 ? 'var(--positive)' : 'var(--negative)';
+                html += `<span style="color:${color}">[${i}] = ${v.toFixed(3)}</span><br>`;
             });
+            html += `</div>`;
         }
-        html += `</code></div>`;
         el.innerHTML = html;
         return;
     }
-    
+
     if (type === 'embedding' && data.embedding) {
-        let html = EXPLANATIONS.embedding;
-        html += `<h3>Token Embeddings Heatmap</h3><div id="emb-heatmap"></div>`;
-        html += `<h3>Positional Encoding Heatmap</h3><div id="pe-heatmap"></div>`;
+        let html = INSPECTOR_EXPLANATIONS.embedding.body;
+        html += `<h3>Token Embeddings Heatmap</h3><p>Each row is one token's vector. Similar patterns = similar meanings.</p><div id="emb-heatmap"></div>`;
+        html += `<h3>Positional Encoding Heatmap</h3><p>Fixed sinusoidal patterns — each position has a unique signature.</p><div id="pe-heatmap"></div>`;
         html += `<h3>Combined (Embedding + PE)</h3><div id="combined-heatmap"></div>`;
         el.innerHTML = html;
-        
-        const emb = data.embedding;
-        appendHeatmap('#emb-heatmap', emb.token_embeddings);
-        appendHeatmap('#pe-heatmap', emb.positional_encoding);
-        appendHeatmap('#combined-heatmap', emb.combined);
+
+        appendHeatmap('#emb-heatmap', data.embedding.token_embeddings);
+        appendHeatmap('#pe-heatmap', data.embedding.positional_encoding);
+        appendHeatmap('#combined-heatmap', data.embedding.combined);
         return;
     }
-    
-    // Default
-    el.innerHTML = EXPLANATIONS[type] || `<div class="inspector-placeholder">Click any component to inspect</div>`;
+
+    // Default: use inspector explanations
+    const exp = INSPECTOR_EXPLANATIONS[type];
+    if (exp) {
+        el.innerHTML = `<h3>${exp.title}</h3>${exp.body}`;
+    } else {
+        el.innerHTML = `<div class="inspector-placeholder"><div class="placeholder-icon">🔍</div><p>Click any component to inspect</p></div>`;
+    }
 }
 
 function appendHeatmap(selector, matrix) {
     const el = $(selector);
-    if (el && matrix) {
-        const canvas = createMatrixHeatmap(matrix, 250);
-        el.appendChild(canvas);
-    }
+    if (el && matrix) el.appendChild(createMatrixHeatmap(matrix, 280));
 }
 
 function createDetailedAttentionHeatmap(head, tokens) {
     const seq = head.length;
     if (seq === 0) return null;
-    
+
     const labelW = 30;
-    const cellSize = Math.min(28, Math.floor(250 / seq));
+    const cellSize = Math.min(28, Math.floor(280 / seq));
     const w = labelW + cellSize * seq;
     const h = labelW + cellSize * seq;
-    
+
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     canvas.style.width = w + 'px';
     canvas.style.height = h + 'px';
     canvas.className = 'heatmap';
-    
+    canvas.style.cursor = 'crosshair';
+
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#0f1729';
-    ctx.fillRect(0, 0, w, h);
-    
-    // Labels
-    ctx.fillStyle = '#8899bb';
-    ctx.font = `${Math.min(11, cellSize - 2)}px monospace`;
-    ctx.textAlign = 'center';
-    
-    for (let i = 0; i < seq; i++) {
-        const display = tokens[i] === ' ' ? '␣' : tokens[i];
-        ctx.fillText(display, labelW + i * cellSize + cellSize / 2, labelW - 4);
-        
-        ctx.save();
-        ctx.translate(labelW - 4, labelW + i * cellSize + cellSize / 2 + 4);
-        ctx.fillText(display, 0, 0);
-        ctx.restore();
-    }
-    
-    // Cells
-    for (let i = 0; i < seq; i++) {
-        for (let j = 0; j < seq; j++) {
-            ctx.fillStyle = heatColor(head[i][j]);
-            ctx.fillRect(labelW + j * cellSize, labelW + i * cellSize, cellSize - 1, cellSize - 1);
-            
-            // Show value
-            if (cellSize >= 20) {
-                ctx.fillStyle = head[i][j] > 0.5 ? '#fff' : '#aaa';
-                ctx.font = `${Math.min(9, cellSize - 8)}px monospace`;
-                ctx.textAlign = 'center';
-                ctx.fillText(head[i][j].toFixed(1), labelW + j * cellSize + cellSize / 2, labelW + i * cellSize + cellSize / 2 + 3);
+
+    function draw(highlightRow, highlightCol) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+
+        // Labels
+        ctx.fillStyle = '#5f6b7a';
+        ctx.font = `${Math.min(11, cellSize - 2)}px Inter, sans-serif`;
+        ctx.textAlign = 'center';
+
+        for (let i = 0; i < seq; i++) {
+            const display = tokens[i] === ' ' ? '␣' : tokens[i];
+            const isHighlightCol = highlightRow !== undefined && i === highlightCol;
+            const isHighlightRow = highlightRow !== undefined && i === highlightRow;
+            ctx.fillStyle = isHighlightCol || isHighlightRow ? '#4A90D9' : '#5f6b7a';
+            ctx.font = isHighlightCol || isHighlightRow ? `bold ${Math.min(11, cellSize - 2)}px Inter, sans-serif` : `${Math.min(11, cellSize - 2)}px Inter, sans-serif`;
+            ctx.fillText(display, labelW + i * cellSize + cellSize / 2, labelW - 5);
+            ctx.save();
+            ctx.translate(labelW - 5, labelW + i * cellSize + cellSize / 2 + 4);
+            ctx.fillText(display, 0, 0);
+            ctx.restore();
+        }
+
+        // Cells
+        for (let i = 0; i < seq; i++) {
+            for (let j = 0; j < seq; j++) {
+                const val = head[i][j];
+                const isHighlight = (highlightRow === i);
+                ctx.fillStyle = heatColor(val);
+                if (highlightRow !== undefined && !isHighlight) {
+                    ctx.globalAlpha = 0.3;
+                }
+                ctx.fillRect(labelW + j * cellSize, labelW + i * cellSize, cellSize - 1, cellSize - 1);
+                ctx.globalAlpha = 1;
+
+                if (cellSize >= 20) {
+                    ctx.fillStyle = val > 0.5 ? '#fff' : '#666';
+                    ctx.font = `${Math.min(9, cellSize - 8)}px monospace`;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(val.toFixed(1), labelW + j * cellSize + cellSize / 2, labelW + i * cellSize + cellSize / 2 + 3);
+                }
             }
         }
     }
-    
+
+    draw();
+
+    // Hover interaction
+    canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const col = Math.floor((mx - labelW) / cellSize);
+        const row = Math.floor((my - labelW) / cellSize);
+        if (row >= 0 && row < seq && col >= 0 && col < seq) {
+            draw(row, col);
+            // Show tooltip
+            let tip = canvas.parentElement.querySelector('.attn-tooltip');
+            if (!tip) { tip = document.createElement('div'); tip.className = 'attn-tooltip'; canvas.parentElement.appendChild(tip); }
+            const fromTok = tokens[row] === ' ' ? '␣' : tokens[row];
+            const toTok = tokens[col] === ' ' ? '␣' : tokens[col];
+            tip.textContent = `'${fromTok}' → '${toTok}': ${head[row][col].toFixed(3)}`;
+            tip.style.left = (mx + 12) + 'px';
+            tip.style.top = (my - 20) + 'px';
+            tip.style.display = 'block';
+        } else {
+            draw();
+            const tip = canvas.parentElement.querySelector('.attn-tooltip');
+            if (tip) tip.style.display = 'none';
+        }
+    });
+    canvas.addEventListener('mouseleave', () => {
+        draw();
+        const tip = canvas.parentElement.querySelector('.attn-tooltip');
+        if (tip) tip.style.display = 'none';
+    });
+
     return canvas;
 }
 
 function createMatrixHeatmap(matrix, maxW) {
     const rows = matrix.length;
     const cols = matrix[0].length;
-    
-    // Find min/max
     let min = Infinity, max = -Infinity;
-    for (const row of matrix) {
-        for (const v of row) {
-            if (v < min) min = v;
-            if (v > max) max = v;
-        }
-    }
-    
+    for (const row of matrix) for (const v of row) { if (v < min) min = v; if (v > max) max = v; }
+
     const cellW = Math.max(2, Math.min(8, Math.floor(maxW / cols)));
     const cellH = Math.max(2, Math.min(12, Math.floor(100 / rows)));
-    
+
     const canvas = document.createElement('canvas');
     canvas.width = cellW * cols;
     canvas.height = cellH * rows;
     canvas.style.width = Math.min(maxW, cellW * cols) + 'px';
     canvas.style.height = cellH * rows + 'px';
     canvas.className = 'heatmap';
-    
+
     const ctx = canvas.getContext('2d');
     for (let i = 0; i < rows; i++) {
         for (let j = 0; j < cols; j++) {
@@ -398,7 +537,6 @@ function createMatrixHeatmap(matrix, maxW) {
             ctx.fillRect(j * cellW, i * cellH, cellW, cellH);
         }
     }
-    
     return canvas;
 }
 
@@ -406,7 +544,7 @@ function createMatrixHeatmap(matrix, maxW) {
 async function doGenerate() {
     const text = $('#input-text').value.trim();
     if (!text) return;
-    
+
     $('#btn-generate').textContent = '⏳ Generating…';
     try {
         const res = await fetch('/api/generate', {
@@ -415,28 +553,23 @@ async function doGenerate() {
             body: JSON.stringify({ text, max_tokens: 30 }),
         });
         const data = await res.json();
-        
-        const genEl = $('#generation-output');
-        genEl.classList.remove('hidden');
-        
-        const genText = $('#gen-text');
-        genText.innerHTML = `<span class="gen-original">${escHtml(data.input)}</span><span class="gen-new">${escHtml(data.output.slice(data.input.length))}</span>`;
-        
-        // Show step details
+
+        const banner = $('#generation-banner');
+        banner.classList.remove('hidden');
+        $('#gen-text').innerHTML = `<span class="gen-original">${escHtml(data.input)}</span><span class="gen-new">${escHtml(data.output.slice(data.input.length))}</span>`;
+
+        const stepsCard = $('#gen-steps-card');
+        stepsCard.classList.remove('hidden');
         const stepsEl = $('#gen-steps');
-        stepsEl.innerHTML = '<h3>Generation Steps</h3>';
+        stepsEl.innerHTML = '';
         data.steps.forEach((step, i) => {
-            const div = document.createElement('div');
-            div.className = 'info-item';
-            div.style.marginBottom = '4px';
             const topPreds = step.top_predictions.map(p => `'${p.char === ' ' ? '␣' : p.char}' ${(p.prob * 100).toFixed(0)}%`).join(', ');
-            div.innerHTML = `<span class="label">Step ${i + 1}</span> → <b>${step.predicted_char === ' ' ? '␣' : step.predicted_char}</b> <span style="color:var(--text-dim);font-size:0.7rem">(${topPreds})</span>`;
-            stepsEl.appendChild(div);
+            stepsEl.innerHTML += `<div class="gen-step-item">Step ${i + 1} → <b>${step.predicted_char === ' ' ? '␣' : step.predicted_char}</b> <span style="color:var(--text-dim);font-size:0.7rem">(${topPreds})</span></div>`;
         });
     } catch(e) {
         console.error(e);
     }
-    $('#btn-generate').textContent = '🔄 Generate';
+    $('#btn-generate').textContent = '🔄 Generate 30 chars';
 }
 
 function escHtml(s) {
