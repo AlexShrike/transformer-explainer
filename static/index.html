@@ -11,7 +11,7 @@
 <body>
     <header>
         <div class="header-inner">
-            <h1>✨ Transformer Explainer</h1>
+            <h1>Transformer Explainer</h1>
             <p class="subtitle">Watch data flow through a real transformer — step by step, in plain English</p>
         </div>
     </header>
@@ -22,12 +22,12 @@
                 <label for="input-text">Input text</label>
                 <textarea id="input-text" placeholder="Type text here…" rows="2">the cat sat on </textarea>
             </div>
-            <button id="btn-process" class="btn btn-primary">⚡ Process</button>
-            <button id="btn-generate" class="btn btn-secondary">🔄 Generate 30 chars</button>
+            <button id="btn-process" class="btn btn-primary">Process</button>
+            <button id="btn-generate" class="btn btn-secondary">Generate 30 chars</button>
             <div class="step-controls hidden" id="step-controls">
-                <button id="btn-prev-step" class="btn btn-step" disabled>← Prev</button>
+                <button id="btn-prev-step" class="btn btn-step" disabled>Prev</button>
                 <span id="step-indicator" class="step-indicator">Step 1 / 8</span>
-                <button id="btn-next-step" class="btn btn-step">Next →</button>
+                <button id="btn-next-step" class="btn btn-step">Next</button>
                 <button id="btn-show-all" class="btn btn-step">Show All</button>
             </div>
         </div>
@@ -35,22 +35,24 @@
 
     <div id="generation-banner" class="generation-banner hidden">
         <div id="gen-text" class="gen-text"></div>
-        <button id="btn-close-gen" class="btn-icon" title="Close">✕</button>
+        <button id="btn-close-gen" class="btn-icon" title="Close">X</button>
     </div>
 
     <div class="main-layout">
         <!-- Left: Tokenization & Model Info -->
         <aside class="panel panel-left">
             <div id="tokenization" class="card hidden">
-                <h2>🔤 Tokens</h2>
+                <h2>Tokens</h2>
+                <p class="card-explanation">Each character is split into a separate token. The number below each letter is its <strong>Token ID</strong> — the model only works with numbers, not letters.</p>
                 <div id="token-display" class="token-row"></div>
             </div>
             <div class="card">
-                <h2>🧠 Model Info</h2>
+                <h2>Model Info</h2>
+                <p class="card-explanation">These are the hyperparameters that define the model's architecture — its size, capacity, and structure.</p>
                 <div id="model-info" class="info-grid"></div>
             </div>
             <div id="gen-steps-card" class="card hidden">
-                <h2>📝 Generation Steps</h2>
+                <h2>Generation Steps</h2>
                 <div id="gen-steps"></div>
             </div>
         </aside>
@@ -59,8 +61,7 @@
         <main class="panel panel-center">
             <div id="flow-diagram">
                 <div class="flow-placeholder">
-                    <div class="placeholder-icon">🔮</div>
-                    <p>Type some text and press <strong>⚡ Process</strong> to visualize the transformer</p>
+                    <p>Type some text and press <strong>Process</strong> to visualize the transformer</p>
                 </div>
             </div>
         </main>
@@ -69,7 +70,6 @@
         <aside class="panel panel-right">
             <div id="inspector">
                 <div class="inspector-placeholder">
-                    <div class="placeholder-icon">🔍</div>
                     <p>Click any component in the flow to see details</p>
                 </div>
             </div>
