@@ -58,17 +58,17 @@ function flowExplanation(type, data) {
     if (!data || !modelInfo) return '';
     const input = data.tokens.join('');
     const n = data.tokens.length;
-    const tokenList = data.tokens.map((t, i) => `'${t === ' ' ? '(space)' : t}' (ID ${data.token_ids[i]})`).join(', ');
+    const tokenList = data.tokens.map((t, i) => `'${t}' (ID ${data.token_ids[i]})`).join(', ');
     const d = modelInfo.d_model;
     const dk = Math.floor(d / modelInfo.n_heads);
-    const lastChar = data.tokens[n - 1] === ' ' ? '(space)' : data.tokens[n - 1];
+    const lastChar = data.tokens[n - 1];
     const topPred = data.top_predictions && data.top_predictions[0];
 
     switch (type) {
         case 'tokens':
-            return `We split '${escHtml(input)}' into ${n} tokens: ${tokenList}. Each character gets a unique number -- the model only understands numbers.`;
+            return `We split '${escHtml(input)}' into ${n} word tokens: ${tokenList}. Each word gets a unique number -- the model only understands numbers.`;
         case 'embedding':
-            return `Each of the ${n} token IDs is converted into a vector of ${d} numbers (d_model = ${d}: the size of each token's vector -- like how many 'features' describe each token). We also add positional encoding -- a mathematical pattern that tells the model '${data.tokens[0]}' is at position 1, '${data.tokens[Math.min(1, n-1)]}' is at position 2, etc. Without this, the model would have no sense of order.`;
+            return `Each of the ${n} word tokens is converted into a vector of ${d} numbers (d_model = ${d}: the size of each token's vector). We also add positional encoding -- a mathematical pattern that tells the model '${data.tokens[0]}' is at position 1, '${data.tokens[Math.min(1, n-1)]}' is at position 2, etc. Without this, the model would have no sense of word order.`;
         case 'attention':
             return `Attention with ${modelInfo.n_heads} heads (n_heads = ${modelInfo.n_heads}: number of parallel attention mechanisms) means we run ${modelInfo.n_heads} SEPARATE attention mechanisms in parallel (at the same time). Each head can learn different relationships between tokens. For each token, we compute Query ('What am I looking for?', ${dk} numbers), Key ('What do I contain?', ${dk} numbers), and Value ('If selected, here is my information', ${dk} numbers). d_k = ${dk} (dimension per head = d_model / n_heads = ${d} / ${modelInfo.n_heads}). The 'parallel' part means all heads compute simultaneously, then their results are combined.`;
         case 'residual1':
@@ -77,10 +77,10 @@ function flowExplanation(type, data) {
         case 'ffn':
             return `Each token passes through a 2-layer neural network independently. It expands from d_model (${d}) to d_ff (${modelInfo.d_ff}: the inner width -- temporarily expanded for more computational power), applies ReLU (sets negatives to zero), then compresses back to ${d}. This is where much of the model's 'thinking' happens for each token in '${escHtml(input)}'.`;
         case 'output': {
-            const topChar = topPred ? (topPred.char === ' ' ? '(space)' : topPred.char) : '?';
+            const topChar = topPred ? topPred.char : '?';
             const topProb = topPred ? (topPred.prob * 100).toFixed(1) : '?';
-            const top3 = (data.top_predictions || []).slice(0, 3).map(p => `'${p.char === ' ' ? '(space)' : p.char}' ${(p.prob*100).toFixed(1)}%`).join(', ');
-            return `For the last token '${lastChar}', we project its ${d}-dimensional vector to ${modelInfo.vocab_size} scores (vocab_size = ${modelInfo.vocab_size}: one per character the model knows). Softmax converts raw scores into probabilities that sum to 1.0. Top predictions: ${top3}. The model predicts '${topChar}' at ${topProb}%.`;
+            const top3 = (data.top_predictions || []).slice(0, 3).map(p => `'${p.char}' ${(p.prob*100).toFixed(1)}%`).join(', ');
+            return `For the last word '${lastChar}', we project its ${d}-dimensional vector to ${modelInfo.vocab_size} scores (vocab_size = ${modelInfo.vocab_size}: one per word the model knows). Softmax converts raw scores into probabilities that sum to 1.0. Top predictions: ${top3}. The model predicts '${topChar}' at ${topProb}%.`;
         }
         default:
             return '';
@@ -160,8 +160,7 @@ function renderTokens(data) {
     const el = $('#token-display');
     el.innerHTML = data.tokens.map((t, i) => {
         const color = TOKEN_COLORS[i % TOKEN_COLORS.length];
-        const display = t === ' ' ? '(space)' : t;
-        return `<span class="token-chip" style="background:${color}" title="Token ID ${data.token_ids[i]}: This character is represented as number ${data.token_ids[i]} in the vocabulary">${display}<span class="tid">ID: ${data.token_ids[i]}</span></span>`;
+        return `<span class="token-chip" style="background:${color}" title="Token ID ${data.token_ids[i]}: '${t}' is word #${data.token_ids[i]} in the vocabulary">${t}<span class="tid">ID: ${data.token_ids[i]}</span></span>`;
     }).join('');
     $('#tokenization').classList.remove('hidden');
 }
@@ -220,7 +219,8 @@ function renderFlow(data) {
         addArrow(container);
     });
 
-    addFlowNode(container, `Step ${stepNum}`, 'Output Linear + Softmax', `Top prediction: "${data.top_predictions[0]?.char}" (${(data.top_predictions[0]?.prob * 100).toFixed(1)}%)`, flowExplanation('output', data), 'output', data);
+    const topPredsSummary = (data.top_predictions || []).slice(0, 3).map(p => `"${p.char}" ${(p.prob * 100).toFixed(1)}%`).join(', ');
+    addFlowNode(container, `Step ${stepNum}`, 'Output Linear + Softmax', `Top: ${topPredsSummary}`, flowExplanation('output', data), 'output', data);
 }
 
 function makeFlowNode(stepLabel, title, subtitle, explanation, onClick) {
@@ -361,8 +361,8 @@ function showInspector(type, data) {
             for (let i = 0; i < headW.length; i++) for (let j = 0; j < headW[i].length; j++) {
                 if (headW[i][j] > maxVal) { maxVal = headW[i][j]; maxI = i; maxJ = j; }
             }
-            const fromT = tokens[maxI] === ' ' ? '(space)' : tokens[maxI];
-            const toT = tokens[maxJ] === ' ' ? '(space)' : tokens[maxJ];
+            const fromT = tokens[maxI];
+            const toT = tokens[maxJ];
             html += `<p style="font-size:0.78rem;color:var(--text-dim)">Strongest connection: '${fromT}' (pos ${maxI}) attends to '${toT}' (pos ${maxJ}) at ${(maxVal*100).toFixed(1)}%.</p>`;
             html += `<div id="attn-head-${h}" class="attn-heatmap-container"></div>`;
         }
@@ -429,17 +429,17 @@ function showInspector(type, data) {
     }
 
     if (type === 'output' && data.top_predictions) {
-        const lastChar = data.tokens[data.tokens.length - 1] === ' ' ? '(space)' : data.tokens[data.tokens.length - 1];
+        const lastWord = data.tokens[data.tokens.length - 1];
         let html = `<h3>Output Projection + Softmax</h3>`;
-        html += `<p>For the last token '${lastChar}' in '${escHtml(data.tokens.join(''))}', we project its ${modelInfo.d_model}-dimensional vector (d_model = ${modelInfo.d_model}) through a linear layer to produce ${modelInfo.vocab_size} scores called <strong>logits</strong> (raw, unnormalized scores -- one per character in the vocabulary). vocab_size (${modelInfo.vocab_size}): total number of unique characters the model knows.</p>`;
-        html += `<p><strong>Softmax</strong> converts these raw scores into probabilities that sum to 1.0. The highest probability character is the model's prediction for the next character.</p>`;
+        html += `<p>For the last word '${lastWord}' in '${escHtml(data.tokens.join(' '))}', we project its ${modelInfo.d_model}-dimensional vector (d_model = ${modelInfo.d_model}) through a linear layer to produce ${modelInfo.vocab_size} scores called <strong>logits</strong> (raw, unnormalized scores -- one per word in the vocabulary). vocab_size (${modelInfo.vocab_size}): total number of unique words the model knows.</p>`;
+        html += `<p><strong>Softmax</strong> converts these raw scores into probabilities that sum to 1.0. The highest probability word is the model's prediction for the next word.</p>`;
         html += `<div class="formula">P(next_token = i) = exp(logit_i) / sum of exp(logit_j)</div>`;
         html += `<h3>Top Predictions</h3>`;
-        html += `<p style="font-size:0.82rem;color:var(--text-secondary)">These are the model's predictions for the next character. Higher bar = more confident.</p>`;
+        html += `<p style="font-size:0.82rem;color:var(--text-secondary)">These are the model's predictions for the next word. Higher bar = more confident.</p>`;
         html += `<div class="bar-chart">`;
         data.top_predictions.forEach(p => {
             const pct = (p.prob * 100).toFixed(1);
-            const display = p.char === ' ' ? '(space)' : (p.char === '\n' ? '(newline)' : p.char);
+            const display = p.char;
             const color = p === data.top_predictions[0] ? 'var(--accent)' : '#78909c';
             html += `<div class="bar-row">
                 <span class="bar-label">'${display}'</span>
@@ -466,9 +466,9 @@ function showInspector(type, data) {
 
     if (type === 'embedding' && data.embedding) {
         const input = data.tokens.join('');
-        const firstTok = data.tokens[0] === ' ' ? '(space)' : data.tokens[0];
+        const firstTok = data.tokens[0];
         let html = `<h3>Embedding + Positional Encoding</h3>`;
-        html += `<p>Each of the ${data.tokens.length} token IDs from '${escHtml(input)}' is looked up in an embedding table -- a learned matrix where row i is the vector for token i. Think of it as converting the simple number ${data.token_ids[0]} for '${firstTok}' into a rich description with d_model (${modelInfo.d_model}: the size of each token's vector -- like how many 'features' describe each token) dimensions.</p>`;
+        html += `<p>Each of the ${data.tokens.length} word tokens from '${escHtml(input)}' is looked up in an embedding table -- a learned matrix where row i is the vector for word i. Think of it as converting the simple number ${data.token_ids[0]} for '${firstTok}' into a rich description with d_model (${modelInfo.d_model}: the size of each token's vector) dimensions.</p>`;
         html += `<p><strong>Positional encoding:</strong> These values encode WHERE the token is in the sequence. Since transformers process all tokens in parallel (no left-to-right!), they have no built-in sense of order. The sinusoidal encoding gives each position a unique signature: '${data.tokens[0]}' at position 0, '${data.tokens[Math.min(1, data.tokens.length-1)]}' at position 1, etc.</p>`;
         html += `<div class="formula">combined[i] = embedding[token_id] + positional_encoding[position]</div>`;
         html += `<h3>Token Embeddings Heatmap</h3>`;
@@ -497,12 +497,12 @@ function showInspector(type, data) {
     }
 
     if (type === 'tokens' && data && data.tokens) {
-        const input = data.tokens.join('');
-        const tokenList = data.tokens.map((t, i) => `'${t === ' ' ? '(space)' : t}' = ID ${data.token_ids[i]}`).join(', ');
+        const input = data.tokens.join(' ');
+        const tokenList = data.tokens.map((t, i) => `'${t}' = ID ${data.token_ids[i]}`).join(', ');
         el.innerHTML = `<h3>Tokenization</h3>
-            <p>We split '${escHtml(input)}' into ${data.tokens.length} individual character tokens: ${tokenList}.</p>
-            <p><strong>Token ID:</strong> Each character is mapped to a unique number from the vocabulary (vocab_size = ${modelInfo.vocab_size}: total number of unique characters the model knows). The model only works with numbers, not letters. These IDs are indices into the vocabulary table.</p>
-            <p>This is the simplest form of tokenization. Real LLMs like GPT use subword tokenization (BPE -- Byte-Pair Encoding groups frequent character pairs into single tokens, e.g. 'th' becomes one token), but characters make the process fully transparent.</p>`;
+            <p>We split '${escHtml(input)}' into ${data.tokens.length} word tokens: ${tokenList}.</p>
+            <p><strong>Token ID:</strong> Each word is mapped to a unique number from the vocabulary (vocab_size = ${modelInfo.vocab_size}: total number of unique words the model knows). The model only works with numbers, not words. These IDs are indices into the vocabulary table.</p>
+            <p>This model uses word-level tokenization for clarity. Real LLMs like GPT use subword tokenization (BPE -- Byte-Pair Encoding groups frequent character sequences into tokens), which balances vocabulary size with coverage.</p>`;
         return;
     }
 
@@ -548,7 +548,7 @@ function createDetailedAttentionHeatmap(head, tokens) {
         ctx.textAlign = 'center';
 
         for (let i = 0; i < seq; i++) {
-            const display = tokens[i] === ' ' ? '_' : tokens[i];
+            const display = tokens[i].length > 4 ? tokens[i].slice(0, 3) + '…' : tokens[i];
             const isHighlightCol = highlightRow !== undefined && i === highlightCol;
             const isHighlightRow = highlightRow !== undefined && i === highlightRow;
             ctx.fillStyle = isHighlightCol || isHighlightRow ? '#2b6cb0' : '#3d4654';
@@ -593,8 +593,8 @@ function createDetailedAttentionHeatmap(head, tokens) {
             draw(row, col);
             let tip = canvas.parentElement.querySelector('.attn-tooltip');
             if (!tip) { tip = document.createElement('div'); tip.className = 'attn-tooltip'; canvas.parentElement.appendChild(tip); }
-            const fromTok = tokens[row] === ' ' ? '(space)' : tokens[row];
-            const toTok = tokens[col] === ' ' ? '(space)' : tokens[col];
+            const fromTok = tokens[row];
+            const toTok = tokens[col];
             tip.textContent = `'${fromTok}' attends to '${toTok}': ${(head[row][col] * 100).toFixed(1)}%`;
             tip.style.left = (mx + 12) + 'px';
             tip.style.top = (my - 20) + 'px';
@@ -651,7 +651,7 @@ async function doGenerate() {
         const res = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text, max_tokens: 30 }),
+            body: JSON.stringify({ text, max_tokens: 20 }),
         });
         const data = await res.json();
 
@@ -664,13 +664,13 @@ async function doGenerate() {
         const stepsEl = $('#gen-steps');
         stepsEl.innerHTML = '';
         data.steps.forEach((step, i) => {
-            const topPreds = step.top_predictions.map(p => `'${p.char === ' ' ? '(space)' : p.char}' ${(p.prob * 100).toFixed(0)}%`).join(', ');
-            stepsEl.innerHTML += `<div class="gen-step-item">Step ${i + 1}: predicted <b>${step.predicted_char === ' ' ? '(space)' : step.predicted_char}</b> <span style="color:var(--text-dim);font-size:0.72rem">(${topPreds})</span></div>`;
+            const topPreds = step.top_predictions.map(p => `'${p.char}' ${(p.prob * 100).toFixed(0)}%`).join(', ');
+            stepsEl.innerHTML += `<div class="gen-step-item">Step ${i + 1}: predicted <b>${step.predicted_char}</b> <span style="color:var(--text-dim);font-size:0.72rem">(${topPreds})</span></div>`;
         });
     } catch(e) {
         console.error(e);
     }
-    $('#btn-generate').textContent = 'Generate 30 chars';
+    $('#btn-generate').textContent = 'Generate 20 words';
 }
 
 function escHtml(s) {

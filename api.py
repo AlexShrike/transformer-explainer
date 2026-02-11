@@ -33,7 +33,7 @@ class GenerateRequest(BaseModel):
 
 @app.get("/api/vocab")
 def get_vocab():
-    return {"vocab": tokenizer.char2id, "vocab_size": tokenizer.vocab_size}
+    return {"vocab": tokenizer.word2id, "vocab_size": tokenizer.vocab_size}
 
 
 @app.get("/api/model-info")
@@ -64,9 +64,10 @@ def process_text(req: ProcessRequest):
     explain["token_ids"] = tok_info["token_ids"]
     explain["vocab_size"] = tok_info["vocab_size"]
     
-    # Map prediction IDs to chars
+    # Map prediction IDs to words
     for pred in explain["top_predictions"]:
-        pred["char"] = tokenizer.decode([pred["id"]])
+        pred["token"] = tokenizer.decode([pred["id"]])
+        pred["char"] = pred["token"]  # backward compat
     
     return explain
 
@@ -82,14 +83,16 @@ def generate(req: GenerateRequest):
         explain = model.explain(token_ids)
         probs = np.array(explain["probabilities"])
         next_id = int(np.argmax(probs))
-        next_char = tokenizer.decode([next_id])
+        next_token = tokenizer.decode([next_id])
+        next_char = next_token  # backward compat
         
         # Slim down step info for generation (just attention weights and predictions)
         step = {
             "input_text": tokenizer.decode(ids),
+            "predicted_token": next_token,
             "predicted_char": next_char,
             "predicted_id": next_id,
-            "top_predictions": [{"id": int(i), "char": tokenizer.decode([i]), "prob": float(probs[i])}
+            "top_predictions": [{"id": int(i), "token": tokenizer.decode([i]), "char": tokenizer.decode([i]), "prob": float(probs[i])}
                                 for i in np.argsort(probs)[::-1][:5]],
             "attention_weights": [[head.tolist() if not isinstance(head, list) else head
                                    for head in block["attention"]["attn_weights"]]
@@ -98,7 +101,7 @@ def generate(req: GenerateRequest):
         steps.append(step)
         ids.append(next_id)
         
-        if next_char == "." or next_char == "\n":
+        if next_token == "." or next_token == "\n":
             break
     
     return {

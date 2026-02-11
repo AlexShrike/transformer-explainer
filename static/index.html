@@ -20,10 +20,10 @@
         <div class="controls-inner">
             <div class="input-group">
                 <label for="input-text">Input text</label>
-                <textarea id="input-text" placeholder="Type text here…" rows="2">the cat sat on </textarea>
+                <textarea id="input-text" placeholder="Type words here…" rows="2">the cat sat on</textarea>
             </div>
             <button id="btn-process" class="btn btn-primary">Process</button>
-            <button id="btn-generate" class="btn btn-secondary">Generate 30 chars</button>
+            <button id="btn-generate" class="btn btn-secondary">Generate 20 words</button>
             <div class="step-controls hidden" id="step-controls">
                 <button id="btn-prev-step" class="btn btn-step" disabled>Prev</button>
                 <span id="step-indicator" class="step-indicator">Step 1 / 8</span>
@@ -43,7 +43,7 @@
         <aside class="panel panel-left">
             <div id="tokenization" class="card hidden">
                 <h2>Tokens</h2>
-                <p class="card-explanation">Each character is split into a separate token. The number below each letter is its <strong>Token ID</strong> — the model only works with numbers, not letters.</p>
+                <p class="card-explanation">Each word is a separate token. The number below each word is its <strong>Token ID</strong> — the model only works with numbers, not words.</p>
                 <div id="token-display" class="token-row"></div>
             </div>
             <div class="card">

@@ -26,46 +26,64 @@ def gelu(x):
 # ---------------------------------------------------------------------------
 
 class Tokenizer:
-    """Character-level tokenizer with special tokens."""
+    """Word-level tokenizer with special tokens."""
 
     def __init__(self, vocab=None):
         if vocab is None:
             vocab = {}
-        self.char2id = dict(vocab)
-        self.id2char = {v: k for k, v in self.char2id.items()}
+        self.word2id = dict(vocab)
+        self.id2word = {v: k for k, v in self.word2id.items()}
 
     def fit(self, text):
-        chars = sorted(set(text))
-        self.char2id = {"<pad>": 0, "<unk>": 1}
-        for i, c in enumerate(chars, start=2):
-            self.char2id[c] = i
-        self.id2char = {v: k for k, v in self.char2id.items()}
+        import re
+        # Tokenize: split into words and punctuation
+        tokens = re.findall(r"[a-zA-Z]+|[.,!?;]", text.lower())
+        words = sorted(set(tokens))
+        self.word2id = {"<pad>": 0, "<unk>": 1}
+        for i, w in enumerate(words, start=2):
+            self.word2id[w] = i
+        self.id2word = {v: k for k, v in self.word2id.items()}
         return self
 
     @property
     def vocab_size(self):
-        return len(self.char2id)
+        return len(self.word2id)
+
+    def tokenize(self, text):
+        import re
+        return re.findall(r"[a-zA-Z]+|[.,!?;]", text.lower())
 
     def encode(self, text):
-        return [self.char2id.get(c, 1) for c in text]
+        return [self.word2id.get(w, 1) for w in self.tokenize(text)]
 
     def decode(self, ids):
-        return "".join(self.id2char.get(i, "?") for i in ids)
+        words = [self.id2word.get(i, "<unk>") for i in ids]
+        # Join with spaces, but don't add space before punctuation
+        result = []
+        for w in words:
+            if w in (".", ",", "!", "?", ";") and result:
+                result.append(w)
+            else:
+                if result:
+                    result.append(" ")
+                result.append(w)
+        return "".join(result)
 
     def forward(self, text):
         return np.array(self.encode(text))
 
     def explain(self, text):
-        ids = self.encode(text)
+        tokens = self.tokenize(text)
+        ids = [self.word2id.get(w, 1) for w in tokens]
         return {
             "input_text": text,
-            "tokens": list(text),
+            "tokens": tokens,
             "token_ids": ids,
             "vocab_size": self.vocab_size,
         }
 
     def to_dict(self):
-        return {"char2id": self.char2id}
+        return {"char2id": self.word2id}  # keep key name for compat
 
     @classmethod
     def from_dict(cls, d):
